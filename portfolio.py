@@ -26,7 +26,7 @@ from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_JUSTIFY
 PRIMARY_BLUE = '#0D47A1'
 DARK_GREY = '#424242'
 # Altere as definições de estilo (por volta das linhas onde você usa getSampleStyleSheet())
-
+DATABASE_URL = st.secrets["DATABASE_URL"]
 # Tentativa de importar Streamlit e verificar se está no ambiente Cloud
 try:
     import streamlit as st
@@ -215,180 +215,197 @@ CACHE_CURRENT_QUOTE_EXPIRATION_SECONDS = 300 # 5 minutos
 FUNDAMENTAL_DATA_EXPIRATION_SECONDS = 86400 # 24 horas
 
 def conectar_db():
-    """Cria a conexão com o banco de dados e garante que as tabelas existam."""
+
     setup_logging() # Garante que o logging esteja configurado
-    conn = sqlite3.connect('portfolio.db')
-    cursor = conn.cursor()
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS ativos (
-        codigo TEXT PRIMARY KEY,
-        nome TEXT,
-        preco_medio REAL,
-        quantidade REAL,
-        valor_total REAL,
-        tipo TEXT,
-        moeda TEXT DEFAULT 'BRL'
-    )
-    """
-    )
-    # Adicionar a coluna 'moeda' se ela não existir
-    cursor.execute("PRAGMA table_info(ativos)")
-    columns = [info[1] for info in cursor.fetchall()]
-    if 'moeda' not in columns:
-        cursor.execute("ALTER TABLE ativos ADD COLUMN moeda TEXT DEFAULT 'BRL'")
+    
+    """Cria a conexão com o banco de dados PostgreSQL em nuvem e garante as tabelas."""
+    try:
+        # Conexão via psycopg2 (para PostgreSQL)
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        #conn = sqlite3.connect('portfolio.db')
+        #cursor = conn.cursor()
+        
+        
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ativos (
+            codigo TEXT PRIMARY KEY,
+            nome TEXT,
+            preco_medio REAL,
+            quantidade REAL,
+            valor_total REAL,
+            tipo TEXT,
+            moeda TEXT DEFAULT 'BRL'
+        )
+        """
+        )
+        # Adicionar a coluna 'moeda' se ela não existir
+        cursor.execute("PRAGMA table_info(ativos)")
+        columns = [info[1] for info in cursor.fetchall()]
+        if 'moeda' not in columns:
+            cursor.execute("ALTER TABLE ativos ADD COLUMN moeda TEXT DEFAULT 'BRL'")
+            conn.commit()
+            logging.info("Coluna 'moeda' adicionada à tabela 'ativos'.")
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cache_relatorio (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data_geracao TEXT NOT NULL,
+            hash_carteira TEXT NOT NULL,
+            conteudo_relatorio TEXT NOT NULL
+        )
+        """
+        )
+
+        # Novas tabelas para dados fundamentalistas
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS asset_info (
+            ticker TEXT PRIMARY KEY,
+            data TEXT,
+            timestamp REAL DEFAULT (strftime('%s', 'now')),
+            FOREIGN KEY (ticker) REFERENCES ativos(codigo)
+        )
+        """
+        )
+        cursor.execute("PRAGMA table_info(asset_info)")
+        columns = [info[1] for info in cursor.fetchall()]
+        if 'timestamp' not in columns:
+            cursor.execute("ALTER TABLE asset_info ADD COLUMN timestamp REAL")
+            conn.commit()
+            logging.info("Coluna 'timestamp' adicionada à tabela 'asset_info'.")
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS asset_financials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT,
+            date TEXT,
+            data TEXT,
+            timestamp REAL DEFAULT (strftime('%s', 'now')),
+            FOREIGN KEY (ticker) REFERENCES ativos(codigo)
+        )
+        """
+        )
+        cursor.execute("PRAGMA table_info(asset_financials)")
+        columns = [info[1] for info in cursor.fetchall()]
+        if 'timestamp' not in columns:
+            cursor.execute("ALTER TABLE asset_financials ADD COLUMN timestamp REAL")
+            conn.commit()
+            logging.info("Coluna 'timestamp' adicionada à tabela 'asset_financials'.")
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS asset_balance_sheet (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT,
+            date TEXT,
+            data TEXT,
+            timestamp REAL DEFAULT (strftime('%s', 'now')),
+            FOREIGN KEY (ticker) REFERENCES ativos(codigo)
+        )
+        """
+        )
+        cursor.execute("PRAGMA table_info(asset_balance_sheet)")
+        columns = [info[1] for info in cursor.fetchall()]
+        if 'timestamp' not in columns:
+            cursor.execute("ALTER TABLE asset_balance_sheet ADD COLUMN timestamp REAL")
+            conn.commit()
+            logging.info("Coluna 'timestamp' adicionada à tabela 'asset_balance_sheet'.")
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS asset_cash_flow (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT,
+            date TEXT,
+            data TEXT,
+            timestamp REAL DEFAULT (strftime('%s', 'now')),
+            FOREIGN KEY (ticker) REFERENCES ativos(codigo)
+        )
+        """
+        )
+        cursor.execute("PRAGMA table_info(asset_cash_flow)")
+        columns = [info[1] for info in cursor.fetchall()]
+        if 'timestamp' not in columns:
+            cursor.execute("ALTER TABLE asset_cash_flow ADD COLUMN timestamp REAL")
+            conn.commit()
+            logging.info("Coluna 'timestamp' adicionada à tabela 'asset_cash_flow'.")
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cache_relatorio_ativo (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            data_geracao TEXT NOT NULL,
+            hash_ativo TEXT NOT NULL,
+            conteudo_relatorio TEXT NOT NULL,
+            UNIQUE(ticker, data_geracao, hash_ativo)
+        )
+        """
+        )
+
         conn.commit()
-        logging.info("Coluna 'moeda' adicionada à tabela 'ativos'.")
+        return conn
 
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS cache_relatorio (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        data_geracao TEXT NOT NULL,
-        hash_carteira TEXT NOT NULL,
-        conteudo_relatorio TEXT NOT NULL
-    )
-    """
-    )
+    except Exception as e:
+        logging.error(f"Erro ao conectar ao banco de dados PostgreSQL: {e}")
+        # Em caso de falha, retorne None ou trate o erro adequadamente.
+        return None    
+    
 
-    # Novas tabelas para dados fundamentalistas
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS asset_info (
-        ticker TEXT PRIMARY KEY,
-        data TEXT,
-        timestamp REAL DEFAULT (strftime('%s', 'now')),
-        FOREIGN KEY (ticker) REFERENCES ativos(codigo)
-    )
-    """
-    )
-    cursor.execute("PRAGMA table_info(asset_info)")
-    columns = [info[1] for info in cursor.fetchall()]
-    if 'timestamp' not in columns:
-        cursor.execute("ALTER TABLE asset_info ADD COLUMN timestamp REAL")
-        conn.commit()
-        logging.info("Coluna 'timestamp' adicionada à tabela 'asset_info'.")
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS asset_financials (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ticker TEXT,
-        date TEXT,
-        data TEXT,
-        timestamp REAL DEFAULT (strftime('%s', 'now')),
-        FOREIGN KEY (ticker) REFERENCES ativos(codigo)
-    )
-    """
-    )
-    cursor.execute("PRAGMA table_info(asset_financials)")
-    columns = [info[1] for info in cursor.fetchall()]
-    if 'timestamp' not in columns:
-        cursor.execute("ALTER TABLE asset_financials ADD COLUMN timestamp REAL")
-        conn.commit()
-        logging.info("Coluna 'timestamp' adicionada à tabela 'asset_financials'.")
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS asset_balance_sheet (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ticker TEXT,
-        date TEXT,
-        data TEXT,
-        timestamp REAL DEFAULT (strftime('%s', 'now')),
-        FOREIGN KEY (ticker) REFERENCES ativos(codigo)
-    )
-    """
-    )
-    cursor.execute("PRAGMA table_info(asset_balance_sheet)")
-    columns = [info[1] for info in cursor.fetchall()]
-    if 'timestamp' not in columns:
-        cursor.execute("ALTER TABLE asset_balance_sheet ADD COLUMN timestamp REAL")
-        conn.commit()
-        logging.info("Coluna 'timestamp' adicionada à tabela 'asset_balance_sheet'.")
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS asset_cash_flow (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ticker TEXT,
-        date TEXT,
-        data TEXT,
-        timestamp REAL DEFAULT (strftime('%s', 'now')),
-        FOREIGN KEY (ticker) REFERENCES ativos(codigo)
-    )
-    """
-    )
-    cursor.execute("PRAGMA table_info(asset_cash_flow)")
-    columns = [info[1] for info in cursor.fetchall()]
-    if 'timestamp' not in columns:
-        cursor.execute("ALTER TABLE asset_cash_flow ADD COLUMN timestamp REAL")
-        conn.commit()
-        logging.info("Coluna 'timestamp' adicionada à tabela 'asset_cash_flow'.")
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS cache_relatorio_ativo (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ticker TEXT NOT NULL,
-        data_geracao TEXT NOT NULL,
-        hash_ativo TEXT NOT NULL,
-        conteudo_relatorio TEXT NOT NULL,
-        UNIQUE(ticker, data_geracao, hash_ativo)
-    )
-    """
-    )
-
-    conn.commit()
-    return conn
 
 # [portfolio.py] - Função conectar_db()
 
 # ... (Seu bloco STREAMLIT_ENV e get_gemini_api_key deve estar acima) ...
 
-def conectar_db():
-    """Cria e retorna a conexão com o banco de dados PostgreSQL em nuvem (Supabase)."""
-    
-    # 1. Obter URL do Streamlit Secrets
-    if STREAMLIT_ENV:
-        try:
-            DB_URL = st.secrets["DATABASE_URL"]
-        except (KeyError, AttributeError):
-            logging.error("DATABASE_URL não encontrado em st.secrets. Conexão falhou.")
-            return None
-    else:
-        # Fallback para uso local ou desenvolvimento
-        logging.warning("Ambiente local. Conexão com banco de dados PostgreSQL via secrets pulada. Use um banco de dados local ou configure as VAs.")
-        return None # Retorna None se não estiver na nuvem (e falha na inicialização local)
-    
-    # 2. Conexão
-    try:
-        # psycopg2.connect pode aceitar o URL completo
-        conn = psycopg2.connect(DB_URL)
-        cursor = conn.cursor()
 
-        # 3. Criação das Tabelas (Sintaxe PostgreSQL, usando SERIAL para auto-incremento se houver, mas aqui
-        # mantemos o texto como PK)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS portfolio_assets (
-                ticker TEXT PRIMARY KEY,
-                peso REAL NOT NULL,
-                nome_empresa TEXT,
-                setor TEXT,
-                cotacao REAL,
-                timestamp REAL
-            );
-        """)
-        # Nota: Usando 'date' como TEXT para consistência com a lógica SQLite original
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS asset_cash_flow (
-                ticker TEXT,
-                date TEXT,
-                data TEXT,
-                timestamp REAL,
-                PRIMARY KEY (ticker, date)
-            );
-        """)
-        conn.commit()
-        logging.info("Conexão com PostgreSQL estabelecida e tabelas garantidas.")
-        return conn
+# def conectar_db():
+#     """Cria e retorna a conexão com o banco de dados PostgreSQL em nuvem (Supabase)."""
     
-    except Exception as e:
-        logging.error(f"Erro CRÍTICO ao conectar/inicializar o banco de dados PostgreSQL: {e}")
-        return None
+#     # 1. Obter URL do Streamlit Secrets
+#     if STREAMLIT_ENV:
+#         try:
+#             DB_URL = st.secrets["DATABASE_URL"]
+#         except (KeyError, AttributeError):
+#             logging.error("DATABASE_URL não encontrado em st.secrets. Conexão falhou.")
+#             return None
+#     else:
+#         # Fallback para uso local ou desenvolvimento
+#         logging.warning("Ambiente local. Conexão com banco de dados PostgreSQL via secrets pulada. Use um banco de dados local ou configure as VAs.")
+#         return None # Retorna None se não estiver na nuvem (e falha na inicialização local)
+    
+#     # 2. Conexão
+#     try:
+#         # psycopg2.connect pode aceitar o URL completo
+#         conn = psycopg2.connect(DB_URL)
+#         cursor = conn.cursor()
+
+#         # 3. Criação das Tabelas (Sintaxe PostgreSQL, usando SERIAL para auto-incremento se houver, mas aqui
+#         # mantemos o texto como PK)
+#         cursor.execute("""
+#             CREATE TABLE IF NOT EXISTS portfolio_assets (
+#                 ticker TEXT PRIMARY KEY,
+#                 peso REAL NOT NULL,
+#                 nome_empresa TEXT,
+#                 setor TEXT,
+#                 cotacao REAL,
+#                 timestamp REAL
+#             );
+#         """)
+#         # Nota: Usando 'date' como TEXT para consistência com a lógica SQLite original
+#         cursor.execute("""
+#             CREATE TABLE IF NOT EXISTS asset_cash_flow (
+#                 ticker TEXT,
+#                 date TEXT,
+#                 data TEXT,
+#                 timestamp REAL,
+#                 PRIMARY KEY (ticker, date)
+#             );
+#         """)
+#         conn.commit()
+#         logging.info("Conexão com PostgreSQL estabelecida e tabelas garantidas.")
+#         return conn
+    
+#     except Exception as e:
+#         logging.error(f"Erro CRÍTICO ao conectar/inicializar o banco de dados PostgreSQL: {e}")
+#         return None
 
 def inserir_ativo(ativo_data):
     """Insere um novo ativo na tabela."""
