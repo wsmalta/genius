@@ -1,0 +1,14 @@
+# Arquivos de banco de dados locais (Não persistentes na nuvem)
+data/portfolio.db
+
+# Arquivos de cache e diretórios de ambiente
+.venv
+venv/
+__pycache__/
+*.pyc
+*.log
+.DS_Store
+
+# Arquivos gerados pelo Streamlit (opcional, mas bom ter)
+.streamlit/
+!/.streamlit/secrets.toml # EXCEÇÃO: Permite que secrets.toml seja rastreado, mas o arquivo deve conter apenas chaves de placeholders localmente.

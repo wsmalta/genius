@@ -1,0 +1,14 @@
+# Dependências encontradas nos arquivos portfolio.py e main.py
+pandas
+yfinance
+google-genai
+reportlab
+matplotlib
+# NOTA: O código atual usa a interface gráfica de desktop (Tkinter),
+# que é nativa do Python e não precisa ser listada aqui.
+
+# Dependências recomendadas para a próxima etapa (Migração para Streamlit/Nuvem)
+# A inclusão destas bibliotecas foi recomendada nas etapas anteriores.
+streamlit
+psycopg2-binary 
+# O 'psycopg2-binary' é necessário se você migrar do SQLite para o PostgreSQL/Cloud DB.
