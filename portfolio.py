@@ -1,7 +1,8 @@
 import hashlib
 from datetime import date
 import re
-import sqlite3
+import psycopg2 # << NOVO: Driver PostgreSQL
+from psycopg2 import sql # Para consultas mais seguras (opcional, mas bom)
 import json
 import pandas as pd
 import yfinance
@@ -174,7 +175,7 @@ def obter_setor_pais_ativo(ticker):
         cursor = conn.cursor()
 
         # Busca a informação mais recente do .info (que contém setor e país)
-        cursor.execute("SELECT data FROM asset_info WHERE ticker = ? ORDER BY timestamp DESC LIMIT 1", (ticker,))
+        cursor.execute("SELECT data FROM asset_info WHERE ticker = %s ORDER BY timestamp DESC LIMIT 1", (ticker,))
         
         resultado = cursor.fetchone()
         
@@ -333,6 +334,61 @@ def conectar_db():
 
     conn.commit()
     return conn
+
+# [portfolio.py] - Função conectar_db()
+
+# ... (Seu bloco STREAMLIT_ENV e get_gemini_api_key deve estar acima) ...
+
+def conectar_db():
+    """Cria e retorna a conexão com o banco de dados PostgreSQL em nuvem (Supabase)."""
+    
+    # 1. Obter URL do Streamlit Secrets
+    if STREAMLIT_ENV:
+        try:
+            DB_URL = st.secrets["DATABASE_URL"]
+        except (KeyError, AttributeError):
+            logging.error("DATABASE_URL não encontrado em st.secrets. Conexão falhou.")
+            return None
+    else:
+        # Fallback para uso local ou desenvolvimento
+        logging.warning("Ambiente local. Conexão com banco de dados PostgreSQL via secrets pulada. Use um banco de dados local ou configure as VAs.")
+        return None # Retorna None se não estiver na nuvem (e falha na inicialização local)
+    
+    # 2. Conexão
+    try:
+        # psycopg2.connect pode aceitar o URL completo
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
+
+        # 3. Criação das Tabelas (Sintaxe PostgreSQL, usando SERIAL para auto-incremento se houver, mas aqui
+        # mantemos o texto como PK)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS portfolio_assets (
+                ticker TEXT PRIMARY KEY,
+                peso REAL NOT NULL,
+                nome_empresa TEXT,
+                setor TEXT,
+                cotacao REAL,
+                timestamp REAL
+            );
+        """)
+        # Nota: Usando 'date' como TEXT para consistência com a lógica SQLite original
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS asset_cash_flow (
+                ticker TEXT,
+                date TEXT,
+                data TEXT,
+                timestamp REAL,
+                PRIMARY KEY (ticker, date)
+            );
+        """)
+        conn.commit()
+        logging.info("Conexão com PostgreSQL estabelecida e tabelas garantidas.")
+        return conn
+    
+    except Exception as e:
+        logging.error(f"Erro CRÍTICO ao conectar/inicializar o banco de dados PostgreSQL: {e}")
+        return None
 
 def inserir_ativo(ativo_data):
     """Insere um novo ativo na tabela."""
@@ -502,7 +558,7 @@ def excluir_ativo(codigo):
     """Remove um ativo da carteira pelo seu código."""
     conn = conectar_db()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM ativos WHERE codigo = ?", (codigo,))
+    cursor.execute("DELETE FROM ativos WHERE codigo = %s", (codigo,))
     conn.commit()
     logging.info(f"Ativo excluído: {codigo}")
     conn.close()
@@ -513,7 +569,7 @@ def adicionar_quantidade_ativo(codigo, quantidade_adicionar, preco_adicionar):
     conn = conectar_db()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT quantidade, preco_medio, valor_total, moeda FROM ativos WHERE codigo = ?", (codigo,))
+        cursor.execute("SELECT quantidade, preco_medio, valor_total, moeda FROM ativos WHERE codigo = %s", (codigo,))
         ativo_existente = cursor.fetchone()
 
         if ativo_existente:
@@ -525,8 +581,8 @@ def adicionar_quantidade_ativo(codigo, quantidade_adicionar, preco_adicionar):
 
             cursor.execute("""
                 UPDATE ativos
-                SET quantidade = ?, preco_medio = ?, valor_total = ?
-                WHERE codigo = ?
+                SET quantidade = %s, preco_medio = %s, valor_total = %s
+                WHERE codigo = %s
             """, (nova_quantidade, novo_preco_medio, novo_valor_total, codigo))
             conn.commit()
             logging.info(f"Quantidade {quantidade_adicionar} adicionada ao ativo {codigo}. Novo preço médio: {novo_preco_medio:.2f}")
@@ -544,7 +600,7 @@ def subtrair_quantidade_ativo(codigo, quantidade_subtrair):
     conn = conectar_db()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT quantidade, preco_medio, valor_total, moeda FROM ativos WHERE codigo = ?", (codigo,))
+        cursor.execute("SELECT quantidade, preco_medio, valor_total, moeda FROM ativos WHERE codigo = %s", (codigo,))
         ativo_existente = cursor.fetchone()
 
         if ativo_existente:
@@ -557,7 +613,7 @@ def subtrair_quantidade_ativo(codigo, quantidade_subtrair):
             
             if nova_quantidade == 0:
                 # Se a quantidade for zero, remove o ativo
-                cursor.execute("DELETE FROM ativos WHERE codigo = ?", (codigo,))
+                cursor.execute("DELETE FROM ativos WHERE codigo = %s", (codigo,))
                 logging.info(f"Ativo {codigo} removido pois a quantidade chegou a zero.")
             else:
                 # Recalcula valor_total e preco_medio (mantendo a proporção do preço médio original)
@@ -571,8 +627,8 @@ def subtrair_quantidade_ativo(codigo, quantidade_subtrair):
 
                 cursor.execute("""
                     UPDATE ativos
-                    SET quantidade = ?, valor_total = ?
-                    WHERE codigo = ?
+                    SET quantidade = %s, valor_total = %s
+                    WHERE codigo = %s
                 """, (nova_quantidade, novo_valor_total, codigo))
                 logging.info(f"Quantidade {quantidade_subtrair} subtraída do ativo {codigo}. Nova quantidade: {nova_quantidade:.2f}")
             
@@ -632,7 +688,7 @@ def obter_relatorio_em_cache():
     cursor.execute("""
         SELECT data_geracao, conteudo_relatorio 
         FROM cache_relatorio
-        WHERE data_geracao = ? AND hash_carteira = ?
+        WHERE data_geracao = %s AND hash_carteira = %s
     """, (data_atual, hash_atual))
     resultado = cursor.fetchone()
     conn.close()
@@ -650,7 +706,7 @@ def salvar_relatorio_em_cache(hash_carteira, relatorio_conteudo):
         cursor.execute("DELETE FROM cache_relatorio")
         cursor.execute("""
             INSERT INTO cache_relatorio (data_geracao, hash_carteira, conteudo_relatorio)
-            VALUES (?, ?, ?)
+            VALUES (%s, %s, %s)
         """, (data_atual, hash_carteira, relatorio_conteudo))
         conn.commit()
     except Exception as e:
@@ -1159,7 +1215,7 @@ def obter_relatorio_ativo_em_cache(ticker, hash_ativo):
     cursor.execute("""
         SELECT conteudo_relatorio 
         FROM cache_relatorio_ativo
-        WHERE ticker = ? AND data_geracao = ? AND hash_ativo = ?
+        WHERE ticker = %s AND data_geracao = %s AND hash_ativo = %s
     """, (ticker, data_atual, hash_ativo))
     resultado = cursor.fetchone()
     conn.close()
@@ -1175,11 +1231,11 @@ def salvar_relatorio_ativo_em_cache(ticker, hash_ativo, relatorio_conteudo):
     cursor = conn.cursor()
     try:
         # Limpa o cache antigo para este ticker
-        cursor.execute("DELETE FROM cache_relatorio_ativo WHERE ticker = ?", (ticker,))
+        cursor.execute("DELETE FROM cache_relatorio_ativo WHERE ticker = %s", (ticker,))
         # Insere o novo relatório
         cursor.execute("""
             INSERT INTO cache_relatorio_ativo (ticker, data_geracao, hash_ativo, conteudo_relatorio)
-            VALUES (?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s)
         """, (ticker, data_atual, hash_ativo, relatorio_conteudo))
         conn.commit()
     except Exception as e:
@@ -1432,7 +1488,7 @@ def exportar_para_pdf(caminho_arquivo, conteudo_texto):
                             estilo_corpo_subsecao = styles['CorpoDestaque']
                         
                         valor = valor.replace('**', '') 
-                        valor = re.sub(r'\*(.*?)\*', r'<i>\1</i>', valor) 
+                        valor = re.sub(r'\*(.*%s)\*', r'<i>\1</i>', valor) 
                         
                         Story.append(Paragraph(valor, estilo_corpo_subsecao))
                         continue 
@@ -1440,8 +1496,8 @@ def exportar_para_pdf(caminho_arquivo, conteudo_texto):
             # --- 5. Outros Bullet Points (que não foram pegos acima) ---
             if line_strip.startswith('* '):
                 processed_line = line_strip[2:]
-                processed_line = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', processed_line)
-                processed_line = re.sub(r'\*(.*?)\*', r'<i>\1</i>', processed_line)
+                processed_line = re.sub(r'\*\*(.*%s)\*\*', r'<b>\1</b>', processed_line)
+                processed_line = re.sub(r'\*(.*%s)\*', r'<i>\1</i>', processed_line)
                 Story.append(Paragraph(processed_line, styles['Corpo']))
                 continue
 
@@ -1460,8 +1516,8 @@ def exportar_para_pdf(caminho_arquivo, conteudo_texto):
 
             # --- 8. Texto Normal (default) ---
             processed_line = line
-            processed_line = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', processed_line)
-            processed_line = re.sub(r'\*(.*?)\*', r'<i>\1</i>', processed_line)
+            processed_line = re.sub(r'\*\*(.*%s)\*\*', r'<b>\1</b>', processed_line)
+            processed_line = re.sub(r'\*(.*%s)\*', r'<i>\1</i>', processed_line)
             Story.append(Paragraph(processed_line, styles['Corpo']))
             
         # 9. INSERIR 'Gerado em:' NO FINAL DO RELATÓRIO
@@ -1493,7 +1549,7 @@ def obter_dados_completos_ativo(codigo_ativo, percent_carteira):
 
         # Dados básicos do ativo
 
-        cursor.execute("SELECT * FROM ativos WHERE codigo = ?", (codigo_ativo,))
+        cursor.execute("SELECT * FROM ativos WHERE codigo = %s", (codigo_ativo,))
 
         ativo_base = cursor.fetchone()
 
@@ -1513,7 +1569,7 @@ def obter_dados_completos_ativo(codigo_ativo, percent_carteira):
 
         # Dados do .info
 
-        cursor.execute("SELECT data FROM asset_info WHERE ticker = ?", (codigo_ativo,))
+        cursor.execute("SELECT data FROM asset_info WHERE ticker = %s", (codigo_ativo,))
 
         info_data = cursor.fetchone()
 
@@ -1525,7 +1581,7 @@ def obter_dados_completos_ativo(codigo_ativo, percent_carteira):
 
         # Dados de financials (mais recente)
 
-        cursor.execute("SELECT date, data FROM asset_financials WHERE ticker = ? ORDER BY date DESC LIMIT 1", (codigo_ativo,))
+        cursor.execute("SELECT date, data FROM asset_financials WHERE ticker = %s ORDER BY date DESC LIMIT 1", (codigo_ativo,))
 
         financials_data = cursor.fetchone()
 
@@ -1543,7 +1599,7 @@ def obter_dados_completos_ativo(codigo_ativo, percent_carteira):
 
         # Dados de balance_sheet (mais recente)
 
-        cursor.execute("SELECT date, data FROM asset_balance_sheet WHERE ticker = ? ORDER BY date DESC LIMIT 1", (codigo_ativo,))
+        cursor.execute("SELECT date, data FROM asset_balance_sheet WHERE ticker = %s ORDER BY date DESC LIMIT 1", (codigo_ativo,))
 
         balance_sheet_data = cursor.fetchone()
 
@@ -1561,7 +1617,7 @@ def obter_dados_completos_ativo(codigo_ativo, percent_carteira):
 
         # Dados de cash_flow (mais recente)
 
-        cursor.execute("SELECT date, data FROM asset_cash_flow WHERE ticker = ? ORDER BY date DESC LIMIT 1", (codigo_ativo,))
+        cursor.execute("SELECT date, data FROM asset_cash_flow WHERE ticker = %s ORDER BY date DESC LIMIT 1", (codigo_ativo,))
 
         cash_flow_data = cursor.fetchone()
 
@@ -1604,13 +1660,13 @@ def atualizar_dados_fundamentalistas(ticker):
 
         # 1. Salvar .info
         try:
-            cursor.execute("SELECT timestamp FROM asset_info WHERE ticker = ?", (ticker,))
+            cursor.execute("SELECT timestamp FROM asset_info WHERE ticker = %s", (ticker,))
             last_update = cursor.fetchone()
 
             if not last_update or (current_time - last_update[0] >= FUNDAMENTAL_DATA_EXPIRATION_SECONDS):
                 info_data = ativo_yf.info
                 if info_data:
-                    cursor.execute("REPLACE INTO asset_info (ticker, data, timestamp) VALUES (?, ?, ?)",
+                    cursor.execute("REPLACE INTO asset_info (ticker, data, timestamp) VALUES (%s, %s, %s)",
                                    (ticker, json.dumps(info_data), current_time))
                     logging.info(f"Dados de .info para {ticker} salvos/atualizados.")
             else:
@@ -1621,17 +1677,17 @@ def atualizar_dados_fundamentalistas(ticker):
 
         # 2. Salvar .financials
         try:
-            cursor.execute("SELECT timestamp FROM asset_financials WHERE ticker = ? ORDER BY timestamp DESC LIMIT 1", (ticker,))
+            cursor.execute("SELECT timestamp FROM asset_financials WHERE ticker = %s ORDER BY timestamp DESC LIMIT 1", (ticker,))
             last_update_financials = cursor.fetchone()
 
             if not last_update_financials or (current_time - last_update_financials[0] >= FUNDAMENTAL_DATA_EXPIRATION_SECONDS):
                 financials_df = ativo_yf.financials
                 if not financials_df.empty:
-                    cursor.execute("DELETE FROM asset_financials WHERE ticker = ?", (ticker,)) # Limpa dados antigos
+                    cursor.execute("DELETE FROM asset_financials WHERE ticker = %s", (ticker,)) # Limpa dados antigos
                     for date_col in financials_df.columns:
                         date_str = date_col.strftime('%Y-%m-%d')
                         data_json = financials_df[date_col].to_json()
-                        cursor.execute("REPLACE INTO asset_financials (ticker, date, data, timestamp) VALUES (?, ?, ?, ?)",
+                        cursor.execute("REPLACE INTO asset_financials (ticker, date, data, timestamp) VALUES (%s, %s, %s, %s)",
                                        (ticker, date_str, data_json, current_time))
                     logging.info(f"Dados de .financials para {ticker} salvos/atualizados.")
             else:
@@ -1641,17 +1697,17 @@ def atualizar_dados_fundamentalistas(ticker):
 
         # 3. Salvar .balance_sheet
         try:
-            cursor.execute("SELECT timestamp FROM asset_balance_sheet WHERE ticker = ? ORDER BY timestamp DESC LIMIT 1", (ticker,))
+            cursor.execute("SELECT timestamp FROM asset_balance_sheet WHERE ticker = %s ORDER BY timestamp DESC LIMIT 1", (ticker,))
             last_update_balance_sheet = cursor.fetchone()
 
             if not last_update_balance_sheet or (current_time - last_update_balance_sheet[0] >= FUNDAMENTAL_DATA_EXPIRATION_SECONDS):
                 balance_sheet_df = ativo_yf.balance_sheet
                 if not balance_sheet_df.empty:
-                    cursor.execute("DELETE FROM asset_balance_sheet WHERE ticker = ?", (ticker,)) # Limpa dados antigos
+                    cursor.execute("DELETE FROM asset_balance_sheet WHERE ticker = %s", (ticker,)) # Limpa dados antigos
                     for date_col in balance_sheet_df.columns:
                         date_str = date_col.strftime('%Y-%m-%d')
                         data_json = balance_sheet_df[date_col].to_json()
-                        cursor.execute("REPLACE INTO asset_balance_sheet (ticker, date, data, timestamp) VALUES (?, ?, ?, ?)",
+                        cursor.execute("REPLACE INTO asset_balance_sheet (ticker, date, data, timestamp) VALUES (%s, %s, %s, %s)",
                                        (ticker, date_str, data_json, current_time))
                     logging.info(f"Dados de .balance_sheet para {ticker} salvos/atualizados.")
             else:
@@ -1661,17 +1717,17 @@ def atualizar_dados_fundamentalistas(ticker):
 
         # 4. Salvar .cashflow
         try:
-            cursor.execute("SELECT timestamp FROM asset_cash_flow WHERE ticker = ? ORDER BY timestamp DESC LIMIT 1", (ticker,))
+            cursor.execute("SELECT timestamp FROM asset_cash_flow WHERE ticker = %s ORDER BY timestamp DESC LIMIT 1", (ticker,))
             last_update_cash_flow = cursor.fetchone()
 
             if not last_update_cash_flow or (current_time - last_update_cash_flow[0] >= FUNDAMENTAL_DATA_EXPIRATION_SECONDS):
                 cashflow_df = ativo_yf.cashflow
                 if not cashflow_df.empty:
-                    cursor.execute("DELETE FROM asset_cash_flow WHERE ticker = ?", (ticker,)) # Limpa dados antigos
+                    cursor.execute("DELETE FROM asset_cash_flow WHERE ticker = %s", (ticker,)) # Limpa dados antigos
                     for date_col in cashflow_df.columns:
                         date_str = date_col.strftime('%Y-%m-%d')
                         data_json = cashflow_df[date_col].to_json()
-                        cursor.execute("REPLACE INTO asset_cash_flow (ticker, date, data, timestamp) VALUES (?, ?, ?, ?)",
+                        cursor.execute("REPLACE INTO asset_cash_flow (ticker, date, data, timestamp) VALUES (%s, %s, %s, %s)",
                                        (ticker, date_str, data_json, current_time))
                     logging.info(f"Dados de .cashflow para {ticker} salvos/atualizados.")
             else:
