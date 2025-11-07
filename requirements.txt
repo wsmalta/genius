@@ -10,5 +10,6 @@ matplotlib
 # Dependências recomendadas para a próxima etapa (Migração para Streamlit/Nuvem)
 # A inclusão destas bibliotecas foi recomendada nas etapas anteriores.
 streamlit
+plotly
 psycopg2-binary 
 # O 'psycopg2-binary' é necessário se você migrar do SQLite para o PostgreSQL/Cloud DB.
