@@ -111,18 +111,40 @@ def conectar_db():
     if not DB_URL and STREAMLIT_ENV:
         try:
             # Esta seção só deve funcionar se estiver rodando no Streamlit Cloud
+            import streamlit as st
             DB_URL = st.secrets["DATABASE_URL"]
         except (KeyError, AttributeError):
             logging.warning("DATABASE_URL não encontrado em st.secrets.")
+            pass
             
     if not DB_URL:
         logging.error("FALHA CRÍTICA: Variável DATABASE_URL não foi carregada.")
         return None
+    
+    
+    # -------------------------------------------------------------------
+    # 💡 LINHA DE DEBUG CRÍTICA: VERIFICAÇÃO DA STRING ANTES DA CONEXÃO
+    # -------------------------------------------------------------------
+    try:
+        # Redige a senha para segurança nos logs, mas confirma o host e a porta.
+        if DB_URL.startswith("postgresql://"):
+            partes = DB_URL.split('@')
+            host_info = partes[1] if len(partes) > 1 else 'HOST_INFO_MISSING'
+            url_debug = f"postgresql://postgres:***SENHA_REDIGIDA***@{host_info}"
+        else:
+            url_debug = DB_URL # Não é URL, imprime a string inteira (ex: formato DSN)
+
+        logging.info(f"DEBUG: Tentando conectar com URL/DSN: {url_debug}")
+    except Exception as e:
+        # Se falhar ao redigir, apenas registra que a string existe
+        logging.warning(f"DEBUG: Erro ao formatar URL, string existe. Erro: {e}")
+    # -------------------------------------------------------------------
+    
             
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
-
+        logging.info("Conexão com PostgreSQL estabelecida com sucesso.")
         # CORREÇÃO: Nome da tabela mudou de 'ativos' para 'portfolio_assets'
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS portfolio_assets (
