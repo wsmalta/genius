@@ -28,6 +28,8 @@ from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_JUSTIFY
 PRIMARY_BLUE = '#0D47A1'
 DARK_GREY = '#424242'
 
+DB_URL = os.environ.get("DATABASE_URL")
+
 # Tentativa de importar Streamlit
 try:
     import streamlit as st
@@ -97,22 +99,25 @@ FUNDAMENTAL_DATA_EXPIRATION_SECONDS = 86400 # 24 horas
 # --- Conexão com Banco de Dados (MIGRAÇÃO POSTGRESQL) ---
 def conectar_db():
     """Cria e retorna a conexão com o banco de dados PostgreSQL em nuvem."""
+
     setup_logging()
     
     DB_URL = None
-    if STREAMLIT_ENV:
+    
+    # 1. Tenta obter a URL da variável de ambiente (Render, local, ou qualquer servidor)
+    DB_URL = os.environ.get("DATABASE_URL")
+    
+    # 2. Se não encontrou na variável de ambiente E se estiver no ambiente Streamlit, tenta st.secrets
+    if not DB_URL and STREAMLIT_ENV:
         try:
+            # Esta seção só deve funcionar se estiver rodando no Streamlit Cloud
             DB_URL = st.secrets["DATABASE_URL"]
         except (KeyError, AttributeError):
-            logging.error("DATABASE_URL não encontrado em st.secrets. Conexão falhou.")
-            return None
-    else:
-        DB_URL = os.environ.get("DATABASE_URL")
-        if not DB_URL:
-            logging.warning("Ambiente local: DATABASE_URL não definido.")
-            # Você pode descomentar a linha abaixo se quiser um fallback para SQLite local
-            # return conectar_db_sqlite_local() 
-            return None
+            logging.warning("DATABASE_URL não encontrado em st.secrets.")
+            
+    if not DB_URL:
+        logging.error("FALHA CRÍTICA: Variável DATABASE_URL não foi carregada.")
+        return None
             
     try:
         conn = psycopg2.connect(DB_URL)
