@@ -3,7 +3,6 @@ pandas
 yfinance
 google-genai
 reportlab
-matplotlib
 # NOTA: O código atual usa a interface gráfica de desktop (Tkinter),
 # que é nativa do Python e não precisa ser listada aqui.
 
